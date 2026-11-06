@@ -1,0 +1,43 @@
+node_modules/
+*.tgz
+.pi/
+coverage/
+
+# Real memory packs and local evidence/configuration; applies at any depth.
+.pi-memory/
+pi-memory/
+.pi-project-memory/
+
+# Local credentials: keep only clearly named, synthetic templates.
+.env
+.env.*
+!.env.example
+!.env.template
+.credentials/
+secrets/
+/auth.json
+/credentials.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Local generated diagnostics and evaluation output (not source fixtures).
+/artifacts/
+/diagnostics/
+/evidence/
+/eval/output/
+/eval/results/
+*.log
+
+# Expensive scientific results are never publication inputs.
+*.cube
+*.cub
+*.chk
+*.fchk
+*.wfn
+*.wfx
+*.gbw
+*.restart

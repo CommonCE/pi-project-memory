@@ -1,0 +1,7 @@
+{
+  "name": "我的计算化学项目",
+  "enabled": true,
+  "profile": "qchem",
+  "learningMode": "suggest",
+  "handoffEnabled": true
+}

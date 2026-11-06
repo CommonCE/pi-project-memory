@@ -1,0 +1,41 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { initializeV2, resolveV2, searchV2 } from '../src/v2-store.mjs';
+import { extractCandidatesV2 } from '../src/v2-extraction.mjs';
+import { listCandidatesV2, reviewCandidateV2 } from '../src/v2-candidates.mjs';
+import { buildWorkingContext } from '../src/v2-working.mjs';
+
+test('T6 extraction scopes candidates, review publications and brief counts without model-selected folders', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'm5-extraction-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const project = initializeV2(root);
+  for (const dir of ['neb', 'opt']) fs.mkdirSync(path.join(root, dir));
+  const neb = resolveV2(path.join(root, 'neb')), opt = resolveV2(path.join(root, 'opt'));
+  const quote = 'SCOPED_FAILURE SCF not converged; no validated energy.';
+  const messages = [{ role: 'user', content: 'Retain the failure evidence, no rerun.' }, { role: 'toolResult', toolName: 'read', content: quote }];
+  let calls = 0;
+  const options = { session: 'same-session', turn: 'same-turn', isCurrent: () => true, model: async ({ prompt }) => {
+    calls++;
+    const data = JSON.parse(prompt), source = data.evidence.find(item => item.text.includes(quote));
+    return { text: JSON.stringify({ candidates: [{ kind: 'diagnostics', title: 'SCOPED_FAILURE', grounding: [{ id: source.id, quote }], entities: [] }] }) };
+  } };
+  assert.equal((await extractCandidatesV2(neb, messages, options)).status, 'queued');
+  const candidate = listCandidatesV2(project).candidates[0].candidate;
+  assert.deepEqual(candidate.entry.scope, { path: 'neb', inherit: true });
+  assert.match(buildWorkingContext(neb, '继续', { firstTurn: true }).brief, /Pending review: 1/);
+  assert.match(buildWorkingContext(opt, '继续', { firstTurn: true }).brief, /Pending review: 0/);
+  assert.equal((await extractCandidatesV2(neb, messages, options)).counts.duplicates, 1);
+  assert.equal((await extractCandidatesV2(opt, messages, options)).status, 'queued');
+  assert.equal(listCandidatesV2(project).candidates.length, 2);
+  reviewCandidateV2(project, candidate.requestId, 'approve');
+  assert.equal(searchV2(neb, 'SCOPED_FAILURE').hits.length, 1);
+  assert.equal(searchV2(opt, 'SCOPED_FAILURE').hits.length, 0);
+  assert.equal(searchV2(project, 'SCOPED_FAILURE').hits.length, 0);
+  const other = listCandidatesV2(project).candidates.find(item => item.candidate.requestId !== candidate.requestId).candidate;
+  reviewCandidateV2(project, other.requestId, 'approve');
+  assert.equal(searchV2(project, 'SCOPED_FAILURE', { allFolders: true, deduplicateSources: true }).hits.length, 2);
+  assert.equal(calls, 3);
+});

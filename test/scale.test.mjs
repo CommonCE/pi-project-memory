@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { loadConfig, saveNote, search } from '../src/core.mjs';
+import { setupProject } from '../src/setup.mjs';
+import { enqueueCandidate, listCandidates } from '../src/learning.mjs';
+
+test('300-note corpus and a full 200-item pending queue remain scoped, searchable and bounded', { timeout: 15000 }, t => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-memory-scale-'));
+  t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const root = path.join(temp, 'repo'); fs.mkdirSync(root);
+  const config = loadConfig({ home: path.join(temp, 'home'), env: {} });
+  const project = setupProject(root, config);
+  const start = performance.now();
+  for (let i = 0; i < 300; i++) saveNote(project, { type: 'observation', title: `Synthetic note ${i}`, content: `Synthetic fixture needle-${i}: release.sh requires successful tests and manual approval. 中文测试记忆。` });
+  const notesMs = performance.now() - start;
+  const queueStart = performance.now();
+  for (let i = 0; i < 200; i++) enqueueCandidate(project, { type: 'context', title: `Pending fixture ${i}`, content: `unapprovedFixtureOnly-${i} must never appear in published memory results.` }, config);
+  const queueMs = performance.now() - queueStart;
+  assert.equal(listCandidates(project).length, 200);
+  assert.throws(() => enqueueCandidate(project, { type: 'context', title: 'Overflow fixture', content: 'Queue capacity must be respected.' }, config), /queue is full/);
+  const searchStart = performance.now();
+  const result = search(project, 'needle-299', config);
+  const searchMs = performance.now() - searchStart;
+  assert.equal(result.truncated, false);
+  assert.equal(result.hits.length, 1);
+  assert.equal(result.hits[0].title, 'Synthetic note 299');
+  assert.equal(search(project, 'unapprovedFixtureOnly-199', config).hits.length, 0);
+  assert.equal(search(project, 'needle-299', { ...config, maxFiles: 20 }).truncated, true);
+  t.diagnostic(JSON.stringify({ syntheticNotes: 300, pendingCandidates: 200, noteCreationMs: Math.round(notesMs), queueFillMs: Math.round(queueMs), singleKeywordSearchMs: Math.round(searchMs) }));
+});
