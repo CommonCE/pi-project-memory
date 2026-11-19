@@ -27,15 +27,15 @@
 10. 独立新目标或压缩/重复调查出现时建议新开对话，交接摘要最多 **30 行**（格式见开发规则 2.6）。
     不自动落盘、写记忆或创建 `.pi-root`；这些规则不是运行时限流，不能清除已有上下文。
 
-已知大文件（必须定点读取）：`src/core.mjs` 32 KB、`README.md` 27 KB、
-`src/v2-store.mjs` 23 KB、`test/lifecycle.test.mjs` 22 KB、`index.ts` 21 KB、
-`src/v2-working.mjs` 19 KB、`test/v2-store.test.mjs` 19 KB、`docs/testing.md` > 32 KB（持续增长，读取前重新估量）。
+重点文件读取前重新估量：`src/memory.mjs`、`README.md`、`test/memory.test.mjs`。
+旧版核心、双入口与阶段验收文件已随架构收缩删除，不沿旧路线图继续扩展。
 
 ## 项目事实
 
-- Node.js >= 22.19，ESM。生产代码是 `src/*.mjs`；TypeScript 仅用于 Pi 扩展入口
-  `index.ts`（0.3.0 默认插件）与 `v2.ts`（M1/M2 新版），由宿主 jiti 加载，无构建步骤。
-  `index.ts` 与 `v2.ts` 不同时加载，不要合并两者。
+- Node.js >= 22.19，ESM。生产代码是 `src/*.mjs`；TypeScript 仅用于唯一 Pi 扩展入口
+  `index.ts`，由宿主 Jiti 加载，无构建步骤。
+- 用户概念只有当前状态与长期笔记，权威来源为 `.pi-memory-local/` 下的 Markdown。
+  稀疏 TF-IDF 向量只在内存重建，不维护独立事实副本或持久索引。
 - 依赖：TypeBox 与 Pi API 由宿主提供；不要安装重复的宿主包，不要引入构建链或无关依赖。
 - 文档用中文，标识符/代码注释/提交信息用英文；引用上游原文保持原样。
 - 本仓库当前没有 `.pi-root`，因此记忆工具读不到内容，也不要为此创建标记
@@ -51,9 +51,8 @@ node --test test/<file>.test.mjs  # 定向单测
 PI_TEST_HOST_PACKAGE="${PI_TEST_HOST_PACKAGE:?Set PI_TEST_HOST_PACKAGE to the host package.json}" npm test
 ```
 
-测试 provider 在 `test/fixtures/offline-provider.ts`，只用于隔离测试。宿主/TUI 测试按
-[.agents/DEVELOPMENT.md](.agents/DEVELOPMENT.md) 的授权要求执行。报告里写清实际跑了什么、
-通过/跳过/未验证的部分。
+入口测试使用明确指定的已安装宿主 API 与模拟事件，不调用真实模型；未指定宿主时跳过。
+完整宿主/TUI 检查不在现行套件内。报告里写清实际跑了什么、通过/跳过/未验证的部分。
 
 ## 边界
 

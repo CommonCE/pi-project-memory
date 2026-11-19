@@ -6,9 +6,9 @@
   "license": "MIT",
   "keywords": ["pi-package", "pi-extension", "project-memory", "markdown"],
   "engines": { "node": ">=22.19.0" },
-  "files": ["index.ts", "v2.ts", "src", "bin", "examples", "docs", "README.md", "LICENSE"],
+  "files": ["index.ts", "src", "bin", "examples", "docs", "README.md", "LICENSE"],
   "pi": { "extensions": ["./index.ts"] },
-  "bin": { "pi-project-memory": "./bin/pi-project-memory.mjs", "pi-memory-init": "./bin/pi-memory-init.mjs" },
+  "bin": { "pi-project-memory": "./bin/pi-project-memory.mjs" },
   "peerDependencies": { "@earendil-works/pi-coding-agent": "*", "typebox": "*" },
-  "scripts": { "test": "node --test test/*.test.mjs", "check": "node --check src/core.mjs && node --check src/learning.mjs && node --check src/setup.mjs && node --check src/v2-domain.mjs && node --check src/v2-store.mjs && node --check src/v2-cli.mjs && node --check src/v2-working.mjs && node --check src/v2-candidates.mjs && node --check src/v2-extraction.mjs && node --check v2.ts && node --check bin/pi-project-memory.mjs && node --check bin/pi-memory-init.mjs" }
+  "scripts": { "test": "node --test test/*.test.mjs", "check": "node --check src/memory.mjs && node --check src/recall.mjs && node --check src/cli.mjs && node --check index.ts && node --check bin/pi-project-memory.mjs" }
 }

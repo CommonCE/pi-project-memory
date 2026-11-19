@@ -10,11 +10,9 @@
 | 任务 | 先读 |
 |---|---|
 | 任何改动 | 已注入的根 `AGENTS.md` 不重读；看 `git status`，再按需定位相关源文件与测试 |
-| 功能/契约变更 | [下一版入口](../docs/next/README.md)、[memory-v2 规格](../docs/next/memory-v2.md)、[决策记录](../docs/decisions/) |
-| v1 插件行为 | [README](../README.md) 的「特性与边界」「存储与接管旧记忆」「安全边界」小节 |
-| v2 使用/契约 | [M1](../docs/next/m1-usage.md)、[M2](../docs/next/m2-usage.md) |
-| 测试与验收 | [测试报告](../docs/testing.md)、`test/` 下对应文件 |
-| 发布前审计 | [公开前清理审计](../docs/next/publication-audit.md) |
+| 功能/契约变更 | [README](../README.md) 对应小节、`src/memory.mjs`、`src/recall.mjs` 与直接相关测试 |
+| 旧数据边界 | [格式与升级边界](../docs/migration.md) |
+| 测试与验收 | [测试说明](../docs/testing.md)、`test/` 下对应文件 |
 
 README 与 `docs/testing.md` 都属于大文件，按第 2 节定点读取。
 
@@ -37,10 +35,10 @@ README 与 `docs/testing.md` 都属于大文件，按第 2 节定点读取。
 
 ```bash
 grep -n '^#\{1,3\} ' README.md                     # Markdown 目录
-rg -n '^(export |async function |function |class |const [A-Z_]+ ?=)' src/core.mjs
+rg -n '^(export |async function |function |class |const [A-Z_]+ ?=)' src/memory.mjs
 rg -n -C 3 'normalizeNote' src test                # 定义 + 调用点
 sed -n '120,200p' docs/testing.md                  # 指定区间
-git diff --stat && git diff -- src/setup.mjs        # 只看需要的文件
+git diff --stat && git diff -- src/cli.mjs          # 只看需要的文件
 ```
 
 ### 2.3 Pi 宿主与第三方包
@@ -91,40 +89,35 @@ git diff --stat && git diff -- src/setup.mjs        # 只看需要的文件
 
 ## 3. 架构与所有权
 
-两代实现并存，互不复用状态：
+只有一套实现，用户概念只有当前状态与长期笔记：
 
 | 路径 | 职责 |
 |---|---|
-| `index.ts` | v1 Pi 扩展（0.3.0 默认插件）：命令、工具、学习/审核/交接装配 |
-| `v2.ts` | v2 Pi 扩展：显式存储、工作记录/当前状态、默认上下文 |
-| `src/core.mjs` | v1 配置、项目解析、笔记校验 (`normalizeNote`)、原子独占写入 (`exclusive`)、检索、初始化 |
-| `src/learning.mjs` | 候选队列、证据采集、审核、交接 |
-| `src/setup.mjs` | `.pi-root` 标记与 CLI 初始化参数/`profile` |
-| `src/v2-domain.mjs` | v2 schema、`KINDS`、`SCHEMA_VERSION`、`LIMITS`、`MemoryError`、校验 |
-| `src/v2-store.mjs` | v2 存储、校验链、显式检索、状态 |
-| `src/v2-working.mjs` | v2 工作记录、当前状态、上下文构建 |
-| `src/v2-cli.mjs` | `bin/*.mjs` 背后的 v2 CLI 与 JSON 输入 |
-| `bin/*.mjs` | `pi-project-memory`、`pi-memory-init` 命令行入口 |
-| `examples/` | 配置样例，不是运行时配置；不提供 Pi 启动包装 |
+| `index.ts` | 唯一 Pi 扩展：命令、两个工具、每次模型调用前刷新上下文 |
+| `src/memory.mjs` | 项目边界、文件格式、原子写入、冲突保护、上下文预算 |
+| `src/recall.mjs` | 从有效笔记重建内存稀疏 TF-IDF 向量，以余弦相似度检索 |
+| `src/cli.mjs` | CLI 与有界 JSON 输入 |
+| `bin/pi-project-memory.mjs` | 唯一可执行入口 |
+| `examples/` | 可读笔记示例，不是运行时配置 |
 
 必须保持的契约：
 
-- 没有 `.pi-root` 就不启用记忆（[0002](../docs/decisions/0002-require-pi-root.md)）；
-  标记只能由用户显式 `/memory-init` 或 CLI 创建，普通启动/自动流程不得创建。
-- 写入是原子且独占的（`exclusive`），不覆盖已有笔记/工作记录；
-  派生结果写新文件。任何"顺手覆盖"都是缺陷。
-- v1 与 v2 存储、目录、schema 互不自动迁移；不要求兼容旧 pack。
-- v2 上限在 `src/v2-domain.mjs` 的 `LIMITS`：单条记录 250000 B、最多 10000 条、总 50 MiB；
-  改上限要同时说明迁移与截断语义。
-- 路径必须经 `assertSafe`/`safeDirectory` 一类校验；错误统一为 `MemoryError` 等既有类型，
-  不要为新失败引入平行的异常族或重复解析器。
-- 工具/CLI 的输入输出契约（参数名、退出码、JSON 字段）非请求不改；改了要同步
-  README/`docs/` 与测试。
+- 没有 `.pi-root` 就不启用记忆；标记只能由用户显式 `/memory-init` 或 CLI `init` 创建。
+- 新格式只使用 `.pi-memory-local/`，旧配置和记忆不读取、不修改、不自动迁移。
+- `state.md` 与 `notes/<uuid>.md` 是内容的唯一权威来源，没有事件链或投影视图。
+- 新增原子独占发布；修改与失效必须持有锁并匹配当前文件内容哈希，再原子替换。
+  不自动解除崩溃锁，不静默吞掉手工修改或并发冲突。
+- `active` 才参与默认笔记召回；`unverified`、`inactive` 需显式查询。
+- 上限集中在 `src/memory.mjs` 的 `LIMITS`；默认上下文最多 12000 字符，整条放入或省略。
+  向量只在内存重建，不能另存一份事实或让过期索引恢复失效笔记。
+- 路径必须通过逐级检查，禁止存储内符号链接逃逸；错误统一为 `MemoryError`。
+- 不把记忆当授权，不把引用存在当结论正确；科学适用条件、来源、单位和失败性质保存在正文中。
+- 工具/CLI 契约变更必须同步 README 与直接相关测试。不重新引入候选、审核、投影或后台治理。
 
 ## 4. 修改约定
 
 - 小步、定点：不重构无关代码，不新增依赖或构建步骤，不顺手换风格。
-- 复用现有 `src/*` 中的校验、存储、检索原语；确认实际定义后再调用，不要凭名字猜签名。
+- 复用 `src/memory.mjs` 与 `src/recall.mjs` 中的校验、存储、检索原语；确认实际定义后再调用，不要凭名字猜签名。
 - 缺失、未知与非有限值要显式处理，不能当 0 或空串；涉及数值/字节上限时写清单位。
 - 时间是外部输入时避免不必要的不确定性；不要为了测试通过削弱校验。
 - 所有已有改动视为用户工作，不回退、不覆盖。有 `.git` 时先检查 `git status`；无 `.git` 时记录文件基线，不为检查状态自动初始化仓库。
@@ -138,13 +131,12 @@ git diff --stat && git diff -- src/setup.mjs        # 只看需要的文件
 2. 定向单测：`node --test test/<name>.test.mjs`。
 3. 全量：`npm test`（`node --test test/*.test.mjs`）。宿主相关用例需要
    `PI_TEST_HOST_PACKAGE=<宿主 package.json>`，未设置时按跳过处理，报告里说明。
-4. 真实宿主/TUI：`python test/tui-smoke.py --host <宿主 package.json>`，使用 Python 标准库；
-   只在需要确认交互、压缩或 `/reload` 行为时执行。
+4. 完整宿主/TUI 验证不在现行测试套件内；只有具体交互风险需要时，另行设计隔离检查。
 
 约束：
 
 - 测试写入新建临时目录，结束后清理；不得改动用户真实记忆包、`~/.pi`、`~/.bashrc`。
-- `test/fixtures/offline-provider.ts` 只用于隔离测试，不加载进正常工作会话，不调用远程/付费模型。
+- 入口测试只加载调用者明确指定的已安装宿主 API，不启动真实模型或正常工作会话。
 - 合成 fixture 通过不等于真实宿主兼容或科学正确；不要用它们声称宿主验证完成。
 - 报告必须写清：实际执行的命令、通过项、跳过项、未验证项。
 
