@@ -1,6 +1,6 @@
 # 格式与升级边界
 
-当前实现仅加载 `index.ts`，存储为 `.pi-memory-local/`，格式标识为 `pi-project-memory/current-notes-1`。这次架构收缩调整了 CLI、工具和内部格式，包版本按要求没有修改。
+当前实现仅加载 `index.ts`，存储为 `.pi-memory-local/`，格式标识为 `pi-project-memory/current-notes-1`。0.4.0 调整了 CLI、工具和内部格式，与旧实现不兼容。
 
 原 `v2.ts`、v1/v2 存储与配置加载器已删除。旧 `.pi/project-memory.json`、`.pi-memory/`、`.notes/`、`pi-memory/` 不被读取、覆盖、删除或自动迁移。启动发现这些常见路径时给出说明；不扫描它们的内容或项目外注册表。仅有旧数据时返回 `legacy-format`，须显式 `/memory-init` 或 CLI `init` 才会创建隔离的新存储。两种目录可以同时存在，当前插件只读新目录。
 
