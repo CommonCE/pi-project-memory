@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { initialize, readNote, readState, save } from '../src/memory.mjs';
 
 const host = process.env.PI_TEST_HOST_PACKAGE;
-test('Pi entry refreshes ephemeral context after corrections, withdrawal and project switches', { skip: !host && 'Set PI_TEST_HOST_PACKAGE to verify the installed host API' }, async t => {
+test('Pi entry refreshes ephemeral context and footer after corrections, withdrawal and project switches', { skip: !host && 'Set PI_TEST_HOST_PACKAGE to verify the installed host API' }, async t => {
   assert.ok(path.isAbsolute(host) && fs.statSync(host).isFile(), 'Host package.json must exist at an absolute path');
   const require = createRequire(host), metadata = JSON.parse(fs.readFileSync(host, 'utf8'));
   const runtime = metadata.exports?.['.']?.import;
@@ -30,17 +30,25 @@ test('Pi entry refreshes ephemeral context after corrections, withdrawal and pro
   const root = path.join(temp, 'first'), other = path.join(temp, 'other');
   fs.mkdirSync(root); fs.mkdirSync(other);
   fs.writeFileSync(path.join(root, '.pi-root'), ''); fs.writeFileSync(path.join(other, '.pi-root'), '');
-  const project = initialize(root); initialize(other);
+  const project = initialize(root);
   const current = save(project, { target: 'state', expected: null, content: 'Inspect SCF input; blocker at calc/a/run.out; no calculation authorization.' });
   const first = save(project, { target: 'note', title: 'SCF fixture', content: 'SCF OLD_FALSE_CLAIM', sources: ['fixture/run.out:7'], conditions: 'Synthetic fixture only.', status: 'active' });
-  const ctx = { cwd: root, hasUI: false };
+  save(project, { target: 'note', title: 'SCF oversized fixture', content: 'SCF oversized '.repeat(900), sources: ['fixture'], conditions: 'Synthetic fixture only.', status: 'active' });
+  const footer = new Map();
+  const ctx = { cwd: root, hasUI: true, ui: {
+    setStatus: (key, value) => footer.set(key, value),
+    notify: content => notifications.push({ content }),
+  } };
+  const memoryStatus = () => footer.get('project-memory');
   const event = { messages: [{ role: 'user', content: 'Continue SCF', timestamp: 1 }, { role: 'custom', customType: 'project-memory-context', content: 'STALE_INJECTION', timestamp: 2 }] };
   await handlers.get('session_start')({}, ctx);
+  assert.equal(memoryStatus(), 'memory: on · manual save · auto recall · hits —');
   await handlers.get('before_agent_start')({ messageType: 'user', prompt: 'Continue SCF' }, ctx);
   const context = await handlers.get('context')(event, ctx);
   assert.equal(context.messages.filter(message => message.customType === 'project-memory-context').length, 1);
   assert.match(context.messages.at(-1).content, /OLD_FALSE_CLAIM/);
-  assert.doesNotMatch(context.messages.at(-1).content, /STALE_INJECTION/);
+  assert.doesNotMatch(context.messages.at(-1).content, /STALE_INJECTION|SCF oversized/);
+  assert.equal(memoryStatus(), 'memory: on · manual save · auto recall · hits 1');
   const toolsSave = tools.get('project_memory_save'), toolsSearch = tools.get('project_memory_search');
   const read = await toolsSearch.execute('read', { id: first.id }, undefined, undefined, ctx);
   assert.equal(read.details.expected, first.expected);
@@ -52,14 +60,63 @@ test('Pi entry refreshes ephemeral context after corrections, withdrawal and pro
   await toolsSave.execute('withdraw', { target: 'note', id: first.id, expected: now.expected, status: 'inactive' }, undefined, undefined, ctx);
   const withdrawn = await handlers.get('context')({ messages: corrected.messages }, ctx);
   assert.doesNotMatch(withdrawn.messages.at(-1).content, /no converged energy/);
+  assert.equal(memoryStatus(), 'memory: on · manual save · auto recall · hits 0');
   await toolsSave.execute('state', { target: 'state', expected: current.expected, content: 'New task: inspect parser source.' }, undefined, undefined, ctx);
   assert.equal(readState(project).content, 'New task: inspect parser source.');
-  const switched = await handlers.get('context')({ messages: withdrawn.messages }, { ...ctx, cwd: other });
+  await handlers.get('session_shutdown')({}, ctx);
+  assert.equal(memoryStatus(), undefined);
+  const otherCtx = { ...ctx, cwd: other };
+  await handlers.get('session_start')({}, otherCtx);
+  assert.equal(memoryStatus(), 'memory: off');
+  const off = await handlers.get('context')({ messages: withdrawn.messages }, otherCtx);
+  assert.equal(off.messages.filter(message => message.customType === 'project-memory-context').length, 0);
+  assert.equal(memoryStatus(), 'memory: off');
+  await commands.get('memory-init').handler('', otherCtx);
+  assert.equal(memoryStatus(), 'memory: on · manual save · auto recall · hits —');
+  const switched = await handlers.get('context')({ messages: withdrawn.messages }, otherCtx);
   assert.doesNotMatch(switched.messages.at(-1).content, /calc\/a|SCF|parser/);
   assert.equal(switched.messages.filter(message => message.customType === 'project-memory-context').length, 1);
+  assert.equal(memoryStatus(), 'memory: on · manual save · auto recall · hits 0');
+  await handlers.get('context')(event, { cwd: root, hasUI: false });
+  assert.equal(memoryStatus(), 'memory: on · manual save · auto recall · hits 0');
   // Storage corruption must drop old context and issue a visible diagnostic.
   const file = path.join(project.memory, 'state.md'); fs.writeFileSync(file, 'broken');
   const failed = await handlers.get('context')({ messages: withdrawn.messages }, ctx);
   assert.equal(failed.messages.filter(message => message.customType === 'project-memory-context').length, 0);
   assert.ok(notifications.some(message => /Memory context unavailable/.test(message.content)));
+  assert.equal(memoryStatus(), 'memory: error');
+
+  const checkpointCtx = { ...otherCtx, mode: 'tui' };
+  const sections = {}, systemPromptOptions = { sections, selectedTools: ['project_memory_save'] };
+  const turn = { messageType: 'user', prompt: 'Implement parser', systemPromptOptions };
+  const start = handlers.get('before_agent_start'), command = commands.get('memory').handler;
+  const draftParams = { target: 'checkpoint', content: 'DRAFT_ONLY: parser implemented; tests pending.' };
+  const stage = (context = checkpointCtx) => toolsSave.execute('draft', draftParams, undefined, undefined, context);
+  await start(turn, checkpointCtx);
+  assert.equal(sections.project_memory_checkpoint, undefined);
+  await assert.rejects(stage(), { code: 'checkpoint-disabled' });
+  await command('checkpoint on', checkpointCtx);
+  await start({ ...turn, messageType: 'custom' }, checkpointCtx);
+  assert.equal(sections.project_memory_checkpoint, undefined);
+  await start(turn, { cwd: other, mode: 'print', hasUI: false });
+  assert.equal(sections.project_memory_checkpoint, undefined);
+  await start(turn, checkpointCtx);
+  assert.match(sections.project_memory_checkpoint, /meaningful task progress/);
+  await assert.rejects(stage({ ...ctx, mode: 'tui' }), { code: 'checkpoint-disabled' });
+  assert.deepEqual((await stage()).details, { saved: true });
+  await assert.rejects(stage(), { code: 'checkpoint-disabled' });
+  const draftContext = await handlers.get('context')(event, checkpointCtx);
+  assert.doesNotMatch(JSON.stringify(draftContext.messages), /DRAFT_ONLY/);
+  await handlers.get('session_start')({}, checkpointCtx);
+  assert.match(notifications.at(-1).content, /checkpoint draft is waiting/);
+  assert.doesNotMatch(notifications.at(-1).content, /DRAFT_ONLY/);
+  await command('checkpoint show', checkpointCtx);
+  const reviewed = JSON.parse(notifications.at(-1).content);
+  assert.equal(reviewed.content, draftParams.content);
+  await command(`checkpoint accept ${reviewed.expected}`, checkpointCtx);
+  const accepted = await handlers.get('context')(event, checkpointCtx);
+  assert.match(accepted.messages.at(-1).content, /DRAFT_ONLY/);
+  await start(turn, checkpointCtx);
+  await handlers.get('agent_settled')({}, checkpointCtx);
+  await assert.rejects(stage(), { code: 'checkpoint-disabled' });
 });

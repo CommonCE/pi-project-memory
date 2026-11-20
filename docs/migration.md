@@ -1,5 +1,11 @@
 # 格式与升级边界
 
+## 从 0.4.0 升级到 0.5.0
+
+无需重新初始化或迁移。正式状态 `state.md`、长期笔记 `notes/<uuid>.md` 及存储格式标识不变。Pi 底部重新显示记忆状态和实际召回的笔记数。自动进度草稿默认关闭；在目标项目启用 `/memory checkpoint on` 后，新增的可选 `checkpoint.md` 保存开关与草稿，不参与默认上下文，也不自动更新正式状态。
+
+## 从旧版 v1/v2 升级
+
 当前实现仅加载 `index.ts`，存储为 `.pi-memory-local/`，格式标识为 `pi-project-memory/current-notes-1`。0.4.0 调整了 CLI、工具和内部格式，与旧实现不兼容。
 
 原 `v2.ts`、v1/v2 存储与配置加载器已删除。旧 `.pi/project-memory.json`、`.pi-memory/`、`.notes/`、`pi-memory/` 不被读取、覆盖、删除或自动迁移。启动发现这些常见路径时给出说明；不扫描它们的内容或项目外注册表。仅有旧数据时返回 `legacy-format`，须显式 `/memory-init` 或 CLI `init` 才会创建隔离的新存储。两种目录可以同时存在，当前插件只读新目录。

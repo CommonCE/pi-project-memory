@@ -6,7 +6,7 @@ import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { buildContext, DIRECTORY, FORMAT, initialize, LIMITS, readNote, readState, resolveProject, save, search, status } from '../src/memory.mjs';
+import { buildContext, DIRECTORY, FORMAT, initialize, LIMITS, readCheckpoint, readNote, readState, resolveProject, reviewCheckpoint, save, saveCheckpoint, search, setCheckpointEnabled, status } from '../src/memory.mjs';
 import { createVectorStore } from '../src/recall.mjs';
 
 const moduleURL = new URL('../src/memory.mjs', import.meta.url).href;
@@ -34,6 +34,59 @@ function child(script) {
     process.on('error', reject); process.on('close', exit => resolve({ exit, stdout, stderr }));
   });
 }
+
+test('checkpoint is opt-in, excluded from recall, and accepted only with a current hash', t => {
+  const { root, project } = fixture(t);
+  const input = { expected: null, base: null, content: 'Draft-only parser findings.' };
+  assert.throws(() => saveCheckpoint(project, input), code('checkpoint-disabled'));
+  assert.equal(fs.existsSync(path.join(project.memory, 'checkpoint.md')), false);
+  const enabled = setCheckpointEnabled(project, true);
+  assert.throws(() => saveCheckpoint(project, { ...input, expected: enabled.expected, content: 'password=do-not-save' }), code('secret-looking-content'));
+  const draft = saveCheckpoint(project, { ...input, expected: enabled.expected });
+  assert.equal(readCheckpoint(resolveProject(root)).content, input.content);
+  assert.equal(readState(project), null);
+  assert.doesNotMatch(buildContext(project, 'parser').content, /Draft-only/);
+  assert.deepEqual(search(project, 'parser').hits, []);
+  assert.throws(() => saveCheckpoint(project, { ...input, expected: enabled.expected }), code('conflict'));
+  const off = setCheckpointEnabled(project, false);
+  assert.equal(off.content, draft.content);
+  assert.throws(() => reviewCheckpoint(project, 'accept', draft.expected), code('conflict'));
+  assert.equal(readState(project), null);
+  assert.equal(reviewCheckpoint(project, 'accept', off.expected).content, '');
+  assert.equal(readState(project).content, draft.content);
+  assert.equal(readCheckpoint(project).enabled, false);
+});
+
+test('checkpoint cannot overwrite newer formal state and remains separately discardable', t => {
+  const { project } = fixture(t);
+  const enabled = setCheckpointEnabled(project, true);
+  const draft = saveCheckpoint(project, { expected: enabled.expected, base: null, content: 'Old task progress.' });
+  const newer = save(project, { target: 'state', expected: null, content: 'Different task.' });
+  assert.throws(() => reviewCheckpoint(project, 'accept', draft.expected), code('conflict'));
+  assert.throws(() => saveCheckpoint(project, { expected: draft.expected, base: null, content: 'Stale turn draft.' }), code('conflict'));
+  assert.equal(readState(project).expected, newer.expected);
+  assert.equal(readCheckpoint(project).expected, draft.expected);
+  assert.equal(reviewCheckpoint(project, 'discard', draft.expected).content, '');
+  assert.equal(readState(project).expected, newer.expected);
+});
+
+test('retrying checkpoint acceptance after a cleanup failure does not rewrite state', t => {
+  const { project } = fixture(t), original = fs.renameSync;
+  const enabled = setCheckpointEnabled(project, true);
+  const draft = saveCheckpoint(project, { expected: enabled.expected, base: null, content: 'Verified progress.' });
+  try {
+    fs.renameSync = (source, target) => {
+      if (target === path.join(project.memory, 'checkpoint.md')) throw Object.assign(new Error('injected ENOSPC'), { code: 'ENOSPC' });
+      return original(source, target);
+    };
+    assert.throws(() => reviewCheckpoint(project, 'accept', draft.expected), code('ENOSPC'));
+  } finally { fs.renameSync = original; }
+  const published = readState(project);
+  assert.equal(published.content, draft.content);
+  assert.equal(readCheckpoint(project).expected, draft.expected);
+  assert.equal(reviewCheckpoint(project, 'accept', draft.expected).content, '');
+  assert.equal(readState(project).expected, published.expected);
+});
 
 test('fresh processes recover current task, blockers, files, next steps and relevant notes', t => {
   const h = fixture(t);

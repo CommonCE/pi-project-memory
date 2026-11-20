@@ -8,6 +8,8 @@ export const DIRECTORY = '.pi-memory-local';
 export const LIMITS = Object.freeze({ stateChars: 4000, noteChars: 16000, fileBytes: 65536, notes: 200, totalBytes: 4 * 1024 * 1024, contextChars: 12000 });
 const ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const TOKEN = /^[a-f0-9]{64}$/;
+const CHECKPOINT = 'checkpoint.md';
+const isToken = value => typeof value === 'string' && TOKEN.test(value);
 const digest = text => createHash('sha256').update(text).digest('hex');
 const withoutBOM = raw => raw.startsWith('\uFEFF') ? raw.slice(1) : raw;
 const json = value => JSON.stringify(value, null, 2) + '\n';
@@ -167,12 +169,16 @@ function decode(raw, kind, id) {
   const end = markdown.indexOf('\n---\n\n', 4);
   requireValue(markdown.startsWith('---\n') && end !== -1, 'invalid-format', 'Expected JSON front matter and Markdown body');
   const header = parseJSON(markdown.slice(4, end));
-  object(header, ['format', 'kind', 'updated', ...(kind === 'note' ? ['title', 'sources', 'conditions', 'status'] : [])]);
+  object(header, ['format', 'kind', 'updated', ...(kind === 'note' ? ['title', 'sources', 'conditions', 'status'] : kind === 'checkpoint' ? ['enabled', 'base'] : [])]);
   const { format, kind: storedKind, updated, ...metadata } = header;
   requireValue(format === FORMAT && storedKind === kind && typeof updated === 'string' && Number.isFinite(Date.parse(updated)), 'invalid-format');
   const content = markdown.slice(end + 6);
   if (kind === 'state') { object(metadata, []); text(content, LIMITS.stateChars, 'state', true); }
-  else normalizeNote({ ...metadata, content });
+  else if (kind === 'checkpoint') {
+    text(content, LIMITS.stateChars, 'checkpoint', true);
+    requireValue(typeof metadata.enabled === 'boolean' && (metadata.base === null || (content !== '' && isToken(metadata.base))), 'invalid-format');
+    requireValue(content === '' || content.trim().length > 0, 'invalid-format');
+  } else normalizeNote({ ...metadata, content });
   secretCheck(raw);
   return { ...(id ? { id } : {}), ...metadata, content, updated, expected: digest(raw) };
 }
@@ -239,6 +245,65 @@ export function save(project, input) {
     return decode(raw, input.target, id);
   });
 }
+export function readCheckpoint(project) {
+  if (!project.enabled) return { enabled: false, content: '', expected: null };
+  assertProject(project);
+  return decode(readRaw(project.memory, CHECKPOINT), 'checkpoint') ?? { enabled: false, content: '', expected: null };
+}
+
+function changeCheckpoint(project, action) {
+  assertProject(project);
+  return lock(project.memory, '.write-lock', () => {
+    assertProject(project);
+    const previous = readRaw(project.memory, CHECKPOINT);
+    const current = decode(previous, 'checkpoint') ?? { enabled: false, base: null, content: '', expected: null };
+    const next = action(current);
+    if (!next) return current;
+    const raw = serialize('checkpoint', { ...next, updated: new Date().toISOString() });
+    secretCheck(raw);
+    atomic(project.memory, CHECKPOINT, raw, previous, () => assertProject(project));
+    return decode(raw, 'checkpoint');
+  });
+}
+
+export function setCheckpointEnabled(project, enabled) {
+  requireValue(typeof enabled === 'boolean', 'invalid-input');
+  return changeCheckpoint(project, current => current.enabled === enabled ? null : { enabled, base: current.base, content: current.content });
+}
+
+export function saveCheckpoint(project, { expected, base, content }) {
+  text(content, LIMITS.stateChars, 'checkpoint');
+  secretCheck(content);
+  return changeCheckpoint(project, current => {
+    requireValue(current.enabled, 'checkpoint-disabled', 'Automatic checkpoint drafts are disabled');
+    requireValue(expected === current.expected, 'conflict', 'Checkpoint changed during this turn; draft not replaced');
+    const currentState = state(project);
+    requireValue(base === (currentState?.expected ?? null), 'conflict', 'Current state changed during this turn; draft not replaced');
+    if (content === currentState?.content || (content === current.content && base === current.base)) return null;
+    return { enabled: true, base, content };
+  });
+}
+
+export function reviewCheckpoint(project, action, expected) {
+  requireValue(['accept', 'discard'].includes(action) && isToken(expected), 'invalid-input', 'Read /memory checkpoint show and supply its current expected hash');
+  return changeCheckpoint(project, current => {
+    requireValue(current.content && expected === current.expected, 'conflict', 'Checkpoint changed or is absent; read it again before retrying');
+    if (action === 'accept') {
+      const previous = readRaw(project.memory, 'state.md'), saved = decode(previous, 'state');
+      // If publication succeeded but clearing the draft failed, retry only the clear.
+      if (saved?.content !== current.content) {
+        requireValue(current.base === (saved?.expected ?? null), 'conflict', 'Current state changed since drafting; reconcile manually, then discard the draft');
+        const raw = serialize('state', { content: current.content, updated: new Date().toISOString() });
+        atomic(project.memory, 'state.md', raw, previous, () => {
+          assertProject(project);
+          requireValue(readCheckpoint(project).expected === expected, 'conflict', 'Checkpoint changed while accepting');
+        });
+      }
+    }
+    return { enabled: current.enabled, base: null, content: '' };
+  });
+}
+
 function ranked(project, query, includeInactive, limit) {
   const notes = inventory(project).filter(item => includeInactive || item.status === 'active');
   // Rebuild from authoritative files on each read: no stale vector can revive a
